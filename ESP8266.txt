@@ -1,0 +1,105 @@
+#include <ESP8266WiFi.h>
+#include <PubSubClient.h>
+
+// ------ WiFi ------
+const char* ssid     = "melon";
+const char* password = "87654321";
+
+// ------ ThingsBoard MQTT ------
+const char* mqtt_server = "iot.ceisufro.cl";
+const int   mqtt_port   = 1883;
+const char* token       = "v4WTUGiBjBLjjC10OUuT"; // usuario MQTT
+
+WiFiClient espClient;            // <--- mueve esto después de includes
+PubSubClient client(espClient);  // <--- evita el error de linking
+
+// ------ Reconexión MQTT ------
+void reconnect() {
+  while (!client.connected()) {
+    Serial.print("Conectando a MQTT...");
+    if (client.connect("ESP8266", token, NULL)) {
+      Serial.println(" conectado!");
+    } else {
+      Serial.print(" Error: ");
+      Serial.print(client.state());
+      Serial.println(" reintentando en 2s...");
+      delay(2000);
+    }
+  }
+}
+
+void setup() {
+  Serial.begin(9600);
+  delay(200);
+
+  // Conexión WiFi
+  WiFi.mode(WIFI_STA);   // <--- ayuda en varias placas
+  WiFi.begin(ssid, password);
+
+  Serial.print("Conectando a WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(400);
+    Serial.print(".");
+  }
+  Serial.println(" OK");
+
+  client.setServer(mqtt_server, mqtt_port);
+}
+
+void loop() {
+  if (!client.connected()) {
+    reconnect();
+  }
+
+  client.loop();
+  leerSerial();
+}
+
+// =====================================================
+//  PROCESAR DATOS DEL ARDUINO — ENVÍO A THINGSBOARD
+// =====================================================
+
+void leerSerial() {
+  static String buffer = "";
+
+  while (Serial.available()) {
+    char c = Serial.read();
+
+    if (c == '\n') {
+      buffer.trim();
+
+      // -------- PESO --------
+      if (buffer.startsWith("PESO:")) {
+        float valor = buffer.substring(5).toFloat();
+        String payload = "{\"peso\":" + String(valor, 2) + "}";
+        client.publish("v1/devices/me/telemetry", payload.c_str());
+        Serial.println("Enviado -> " + payload);
+      }
+
+      // -------- RFID --------
+      else if (buffer.startsWith("RFID detectado")) {
+        String payload = "{\"rfid\":\"" + buffer + "\"}";
+        client.publish("v1/devices/me/telemetry", payload.c_str());
+        Serial.println("Enviado -> " + payload);
+      }
+
+      // -------- ACCESO --------
+      else if (buffer == "Acceso autorizado") {
+        String payload = "{\"estado\":\"Acceso autorizado\"}";
+        client.publish("v1/devices/me/telemetry", payload.c_str());
+        Serial.println("Enviado -> " + payload);
+      }
+
+      // -------- PING --------
+      else if (buffer == "PING") {
+        Serial.println("PONG");
+      }
+
+      buffer = ""; // limpiar
+    }
+
+    else {
+      buffer += c;
+    }
+  }
+}

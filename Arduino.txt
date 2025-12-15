@@ -1,0 +1,135 @@
+#include <HX711.h>
+#include <SPI.h>
+#include <MFRC522.h>
+
+#define EN 9
+#define IN1 8
+#define IN2 7
+#define BUZZER 3
+
+#define DOUT 4
+#define CLK 5
+
+#define SS_PIN 10
+#define RST_PIN 6
+
+HX711 scale;
+MFRC522 rfid(SS_PIN, RST_PIN);
+
+float peso = 0;
+float pesoPlato = 1500;  // Tara del plato (ajustar)
+float umbral = 3000.0;   // Gramos de comida a dispensar
+
+String tagAutorizado = "69 98 E9 5D"; // UID permitido
+
+unsigned long lastSend = 0;
+const unsigned long sendInterval = 1000; // 1 segundo
+
+void setup() {
+  Serial.begin(9600);
+  SPI.begin();
+  rfid.PCD_Init();
+  scale.begin(DOUT, CLK);
+
+  pinMode(EN, OUTPUT);
+  pinMode(IN1, OUTPUT);
+  pinMode(IN2, OUTPUT);
+  pinMode(BUZZER, OUTPUT);
+
+  digitalWrite(EN, HIGH);
+  delay(500);
+
+  Serial.println("Sistema iniciado. Esperando RFID...");
+}
+
+void loop() {
+
+  // --- LECTURA RFID ---
+  if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
+
+    String tagLeido = "";
+    for (byte i = 0; i < rfid.uid.size; i++) {
+      String hexByte = String(rfid.uid.uidByte[i], HEX);
+      hexByte.toUpperCase();
+      tagLeido += hexByte;
+      if (i < rfid.uid.size - 1) tagLeido += " ";
+    }
+
+    Serial.print("RFID detectado: ");
+    Serial.println(tagLeido);
+
+    if (tagLeido == tagAutorizado) {
+      Serial.println("Acceso autorizado");
+      abrirCompuerta();
+    } else {
+      Serial.println("Tag no autorizado");
+    }
+
+    rfid.PICC_HaltA();
+  }
+
+  // --- ENVÍO PERIÓDICO DEL PESO ---
+  if (millis() - lastSend >= sendInterval) {
+    lastSend = millis();
+    peso = leerPeso();
+    Serial.print("PESO:");
+    Serial.println(peso);
+  }
+
+  delay(100);
+}
+
+void abrirCompuerta() {
+  // Motor adelante
+  digitalWrite(IN1, HIGH);
+  digitalWrite(IN2, LOW);
+  Serial.println("Motor adelante: dispensando comida...");
+  delay(2000);
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, LOW);
+
+  unsigned long startTime = millis();
+
+  // Mantener compuerta abierta hasta alcanzar umbral
+  while (millis() - startTime < 8000) {
+    peso = leerPeso();
+    Serial.print("PESO:");
+    Serial.println(peso);
+
+    if (peso >= pesoPlato + umbral) {
+      Serial.println("Peso objetivo alcanzado");
+      cerrarCompuerta();
+      return;
+    }
+    delay(200);
+  }
+
+  cerrarCompuerta();
+}
+
+void cerrarCompuerta() {
+  // Motor inverso
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, HIGH);
+  delay(2000);
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, LOW);
+
+  Serial.println("Compuerta cerrada");
+  activarBuzzer();
+}
+
+float leerPeso() {
+  if (scale.is_ready()) {
+    long reading = scale.read_average(10);
+    return (reading / 100.0); // Ajustar según calibración
+  }
+  return peso;
+}
+
+void activarBuzzer() {
+  digitalWrite(BUZZER, HIGH);
+  delay(1500);
+  digitalWrite(BUZZER, LOW);
+  Serial.println("Buzzer activado");
+}
